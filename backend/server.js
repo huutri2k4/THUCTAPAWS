@@ -51,16 +51,20 @@ require('./src/sockets/chat.socket')(io);
 // 3. Middlewares cơ bản & CORS chuẩn
 app.use(cors({
   origin: function (origin, callback) {
-    // Luôn trả về true để chấp nhận origin gửi lên (tương thích tuyệt đối với credentials: true)
-    callback(null, true);
+    if (!origin) {
+      return callback(null, true);
+    }
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error(`CORS policy denied origin ${origin}`));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  optionsSuccessStatus: 200
 }));
 
-// Xử lý Preflight OPTIONS
-app.options('*', cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));

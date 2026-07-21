@@ -35,7 +35,7 @@ const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173')
     .map((origin) => origin.trim());
 const io = new Server(httpServer, {
     cors: {
-        origin: allowedOrigins,
+        origin: "*",
         credentials: true
     }
 });
@@ -43,7 +43,7 @@ app.set('io', io);
 require('./src/sockets/chat.socket')(io);
 
 // Middlewares cơ bản
-app.use(cors({ origin: allowedOrigins, credentials: true }));
+app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));

@@ -31,33 +31,36 @@ const ChatMessage = require('./src/models/chatMessage');
 const app = express();
 const httpServer = http.createServer(app);
 // CODE MỚI ĐÃ FIX:
+// 1. Khai báo allowedOrigins
 const allowedOrigins = [
   'http://localhost:5173',
   'http://100.26.35.113:5173',
   ...(process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',') : [])
 ].map(origin => origin.trim());
 
+// 2. Cấu hình Socket.IO
 const io = new Server(httpServer, {
     cors: {
-        origin: allowedOrigins,
+        origin: (origin, callback) => callback(null, true),
         credentials: true
     }
 });
 app.set('io', io);
 require('./src/sockets/chat.socket')(io);
 
-// Middlewares cơ bản
+// 3. Middlewares cơ bản & CORS chuẩn
 app.use(cors({
   origin: function (origin, callback) {
-    // Cho phép requests không có origin (như Mobile apps, Postman, Curl) hoặc thuộc allowedOrigins
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(null, true); // Cho qua hết để test không bao giờ dính CORS nữa
-    }
+    // Luôn trả về true để chấp nhận origin gửi lên (tương thích tuyệt đối với credentials: true)
+    callback(null, true);
   },
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
+
+// Xử lý Preflight OPTIONS
+app.options('*', cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));

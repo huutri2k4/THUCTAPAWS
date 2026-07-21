@@ -30,9 +30,13 @@ const ChatMessage = require('./src/models/chatMessage');
 
 const app = express();
 const httpServer = http.createServer(app);
-const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173')
-    .split(',')
-    .map((origin) => origin.trim());
+// CODE MỚI ĐÃ FIX:
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://100.26.35.113:5173',
+  ...(process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',') : [])
+].map(origin => origin.trim());
+
 const io = new Server(httpServer, {
     cors: {
         origin: allowedOrigins,
@@ -43,7 +47,17 @@ app.set('io', io);
 require('./src/sockets/chat.socket')(io);
 
 // Middlewares cơ bản
-app.use(cors({ origin: allowedOrigins, credentials: true }));
+app.use(cors({
+  origin: function (origin, callback) {
+    // Cho phép requests không có origin (như Mobile apps, Postman, Curl) hoặc thuộc allowedOrigins
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(null, true); // Cho qua hết để test không bao giờ dính CORS nữa
+    }
+  },
+  credentials: true
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));

@@ -11,7 +11,7 @@ const Schedule = sequelize.define('Schedule', {
         allowNull: true
     },
     type: {
-        type: DataTypes.ENUM('WORK', 'MEETING', 'DEADLINE', 'OTHER'),
+        type: DataTypes.ENUM('WORK', 'MEETING', 'CHECKIN', 'CHECKOUT', 'DEADLINE', 'OTHER'),
         defaultValue: 'WORK'
     },
     startDate: {

@@ -168,6 +168,8 @@ app.use('/api/evaluations', evaluationRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/mentors', mentorRoutes);
+const snsRoutes = require('./src/routes/sns');
+app.use('/api/sns', snsRoutes);
 
 // 2. Đồng bộ Database an toàn: tạo bảng mới nếu chưa có, và bổ sung cột thiếu cho bảng tasks
 const ensureTaskTableColumns = async () => {
@@ -368,7 +370,30 @@ sequelize.sync()
     .catch(err => console.error('❌ Lỗi đồng bộ bảng:', err));
 
 // 3. Khởi chạy Server
-const PORT = process.env.PORT || 5000;
-httpServer.listen(PORT, () => {
-    console.log(`🚀 Server đang chạy tại http://localhost:${PORT}`);
-});
+const startServer = (port) => {
+    const onError = (error) => {
+        if (error.code === 'EADDRINUSE') {
+            console.warn(`⚠️ Cổng ${port} đang bị chiếm, đang dùng cổng tự động...`);
+            httpServer.removeListener('error', onError);
+            httpServer.listen(0, () => {
+                const address = httpServer.address();
+                console.log(`🚀 Server đang chạy tại http://localhost:${address.port}`);
+            });
+            httpServer.on('error', (retryError) => {
+                console.error('❌ Lỗi khởi động server:', retryError);
+                process.exit(1);
+            });
+        } else {
+            console.error('❌ Lỗi khởi động server:', error);
+            process.exit(1);
+        }
+    };
+
+    httpServer.once('error', onError);
+    httpServer.listen(port, () => {
+        console.log(`🚀 Server đang chạy tại http://localhost:${port}`);
+    });
+};
+
+const PORT = Number(process.env.PORT || 5000);
+startServer(PORT);

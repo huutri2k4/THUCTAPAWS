@@ -6,10 +6,18 @@ const validateSchedule = (data, partial = false) => {
         timeZone: 'Asia/Ho_Chi_Minh'
     }).format(new Date());
     const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+    const validTypes = ['WORK', 'MEETING', 'CHECKIN', 'CHECKOUT', 'DEADLINE', 'OTHER'];
+
     if (data.startDate && data.startDate < today) throw new Error('Ngày bắt đầu không được nhỏ hơn hôm nay');
     if (data.endDate && data.endDate < today) throw new Error('Ngày kết thúc không được nhỏ hơn hôm nay');
     if (data.startDate && data.endDate && data.endDate < data.startDate) {
         throw new Error('Ngày kết thúc phải từ ngày bắt đầu trở đi');
+    }
+    if (!partial && (!data.type || !validTypes.includes(data.type))) {
+        throw new Error('Loại lịch không hợp lệ');
+    }
+    if (data.type != null && data.type !== '' && !validTypes.includes(data.type)) {
+        throw new Error('Loại lịch không hợp lệ');
     }
     if (data.startTime && !timePattern.test(String(data.startTime).slice(0, 5))) {
         throw new Error('Giờ bắt đầu không hợp lệ');

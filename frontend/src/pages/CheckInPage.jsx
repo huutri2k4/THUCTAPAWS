@@ -90,16 +90,48 @@ const formatClock = (value) => {
   return `${pad(parts[0])}:${pad(parts[1])}`;
 };
 
+const formatMinutesToTimeString = (minutes) => {
+  if (minutes == null || Number.isNaN(minutes)) return '--:--';
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+};
+
+const getCheckoutTooltip = (checkoutWindow) => {
+  if (!checkoutWindow) return 'Chưa có lịch checkout';
+  return `Checkout mở từ ${formatMinutesToTimeString(checkoutWindow.startMinutes)} đến ${formatMinutesToTimeString(checkoutWindow.endMinutes)}`;
+};
+
+const getCheckoutTimeRangeLabel = (checkoutWindow) => {
+  if (!checkoutWindow) return 'chưa có lịch checkout';
+  return `${formatClock(formatMinutesToTimeString(checkoutWindow.startMinutes))}–${formatClock(formatMinutesToTimeString(checkoutWindow.endMinutes))}`;
+};
+
 const parseTimeValue = (value) => {
   if (!value) return null;
+  
+  // Handle object (Buffer or object from database)
+  if (typeof value === 'object') {
+    if (value.toString && typeof value.toString === 'function') {
+      try {
+        value = value.toString();
+      } catch (e) {
+        return null;
+      }
+    } else {
+      return null;
+    }
+  }
+
   const text = String(value).trim();
 
   // Standard 24h format: 15:50
-  const colonMatch = /^([0-2]?\d)\s*:\s*([0-5]?\d)$/.exec(text);
+  const colonMatch = /^([0-2]?\d)\s*:\s*([0-5]?\d)/.exec(text);
   if (colonMatch) {
     const hour = Number(colonMatch[1]);
     const minute = Number(colonMatch[2]);
     if (hour >= 0 && hour < 24 && minute >= 0 && minute < 60) {
+      console.log('[parseTimeValue] Parsed from colon format:', { text, hour, minute, result: hour * 60 + minute });
       return hour * 60 + minute;
     }
   }
@@ -110,6 +142,7 @@ const parseTimeValue = (value) => {
     const hour = Number(vietnameseMatch[1]);
     const minute = vietnameseMatch[2] ? Number(vietnameseMatch[2]) : 0;
     if (hour >= 0 && hour < 24 && minute >= 0 && minute < 60) {
+      console.log('[parseTimeValue] Parsed from vietnamese format:', { text, hour, minute, result: hour * 60 + minute });
       return hour * 60 + minute;
     }
   }
@@ -120,10 +153,12 @@ const parseTimeValue = (value) => {
     const hour = Number(numericMatch[1]);
     const minute = Number(numericMatch[2]);
     if (hour >= 0 && hour < 24 && minute >= 0 && minute < 60) {
+      console.log('[parseTimeValue] Parsed from numeric format:', { text, hour, minute, result: hour * 60 + minute });
       return hour * 60 + minute;
     }
   }
 
+  console.log('[parseTimeValue] Failed to parse:', { value, text });
   return null;
 };
 
@@ -135,9 +170,97 @@ const getWeekStart = (date) => {
   return d;
 };
 
-const getExpectedCheckInStatus = (scheduleEvents, meetingEvents, now = new Date()) => {
+const getEffectiveCheckInWindow = (schedules, date, now = new Date()) => {
+  // Get work schedules for the given date
+  const dateStr = typeof date === 'string' ? date : toISODateLocal(date);
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
-  return currentMinutes <= 9 * 60 ? 'PRESENT' : 'LATE';
+  const todaySchedules = schedules.filter((schedule) => {
+    if (!schedule.startDate || !schedule.endDate) return false;
+    const startDate = toLocalDateOnly(schedule.startDate);
+    const endDate = toLocalDateOnly(schedule.endDate);
+    return startDate && endDate && startDate <= dateStr && dateStr <= endDate && schedule.type !== 'CHECKOUT';
+  });
+
+  console.log('[getEffectiveCheckInWindow]', {
+    dateStr,
+    currentMinutes,
+    totalSchedules: schedules.length,
+    todaySchedules: todaySchedules.map(s => ({
+      title: s.title,
+      startDate: s.startDate,
+      endDate: s.endDate,
+      startTime: s.startTime,
+      endTime: s.endTime,
+      type: s.type
+    }))
+  });
+
+  const matchingSchedule = todaySchedules.find((schedule) => {
+    const startMinutes = parseTimeValue(schedule.startTime);
+    const endMinutes = parseTimeValue(schedule.endTime);
+    return startMinutes != null && endMinutes != null && currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+  });
+
+  const fallbackSchedule = matchingSchedule || todaySchedules[0];
+  if (fallbackSchedule) {
+    const startMinutes = parseTimeValue(fallbackSchedule.startTime);
+    const endMinutes = parseTimeValue(fallbackSchedule.endTime);
+    console.log('[getEffectiveCheckInWindow] Found schedule:', {
+      title: fallbackSchedule.title,
+      startTime: fallbackSchedule.startTime,
+      endTime: fallbackSchedule.endTime,
+      startMinutes,
+      endMinutes
+    });
+    if (startMinutes != null && endMinutes != null) {
+      return { startMinutes, endMinutes, source: 'schedule' };
+    }
+  }
+
+  return null;
+};
+
+const getEffectiveCheckOutWindow = (schedules, date, now = new Date()) => {
+  const dateStr = typeof date === 'string' ? date : toISODateLocal(date);
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+  const todayCheckoutSchedules = schedules.filter((schedule) => {
+    if (!schedule.startDate || !schedule.endDate) return false;
+    const startDate = toLocalDateOnly(schedule.startDate);
+    const endDate = toLocalDateOnly(schedule.endDate);
+    return (
+      startDate &&
+      endDate &&
+      startDate <= dateStr &&
+      dateStr <= endDate &&
+      schedule.type === 'CHECKOUT'
+    );
+  });
+
+  const matchingSchedule = todayCheckoutSchedules.find((schedule) => {
+    const startMinutes = parseTimeValue(schedule.startTime);
+    const endMinutes = parseTimeValue(schedule.endTime);
+    return startMinutes != null && endMinutes != null && currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+  });
+
+  const fallbackSchedule = matchingSchedule || todayCheckoutSchedules[0];
+  if (fallbackSchedule) {
+    const startMinutes = parseTimeValue(fallbackSchedule.startTime);
+    const endMinutes = parseTimeValue(fallbackSchedule.endTime);
+    if (startMinutes != null && endMinutes != null) {
+      return { startMinutes, endMinutes, source: 'schedule' };
+    }
+  }
+
+  return null;
+};
+
+const getExpectedCheckInStatus = (schedules, selectedDate, now = new Date()) => {
+  const window = getEffectiveCheckInWindow(schedules, selectedDate, now);
+  if (!window) return null;
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const onTimeEnd = window.startMinutes + 30; // on-time is 30 mins after window start
+  return currentMinutes <= onTimeEnd ? 'PRESENT' : 'LATE';
 };
 
 const buildCalendarCells = (monthValue) => {
@@ -279,12 +402,25 @@ function CheckInPage() {
   const selectedDayCheckIn = useMemo(() => checkIns.find((item) => item.date === selectedDate), [checkIns, selectedDate]);
 
   const selectedDaySchedules = useMemo(() => {
-    return schedules.filter((schedule) => {
+    const result = schedules.filter((schedule) => {
       if (!schedule.startDate || !schedule.endDate) return false;
       const startDate = toLocalDateOnly(schedule.startDate);
       const endDate = toLocalDateOnly(schedule.endDate);
-      return startDate && endDate && startDate <= selectedDate && selectedDate <= endDate;
+      const matches = startDate && endDate && startDate <= selectedDate && selectedDate <= endDate;
+      if (matches) {
+        console.log('[selectedDaySchedules] Found matching schedule:', {
+          title: schedule.title,
+          startDate,
+          endDate,
+          selectedDate,
+          startTime: schedule.startTime,
+          endTime: schedule.endTime
+        });
+      }
+      return matches;
     });
+    console.log('[selectedDaySchedules] Filtered schedules for', selectedDate, ':', result.length, 'matches from', schedules.length);
+    return result;
   }, [schedules, selectedDate]);
 
   const selectedDayMeetings = useMemo(() => {
@@ -305,39 +441,72 @@ function CheckInPage() {
   const selectedDayExpectedStatus = useMemo(() => {
     if (selectedDayCheckIn) return selectedDayCheckIn.status;
     if (selectedDate !== today) return null;
-    return getExpectedCheckInStatus(selectedDaySchedules, selectedDayMeetings, new Date());
-  }, [selectedDayCheckIn, selectedDate, today, selectedDaySchedules, selectedDayMeetings]);
+    return getExpectedCheckInStatus(schedules, selectedDate, new Date());
+  }, [selectedDayCheckIn, selectedDate, today, schedules]);
+
+  const todayWindow = useMemo(() => getEffectiveCheckInWindow(schedules, today), [schedules, today]);
 
   const selectedDayCheckInLabel = useMemo(() => {
-    if (todayItem) return 'Đã check-in';
+    if (todayItem) {
+      return todayItem.status === 'ABSENT' ? 'Đã vắng' : 'Đã check-in';
+    }
     if (selectedDate !== today) return 'Chỉ check-in hôm nay';
+    if (!todayWindow) return 'Chưa có lịch check-in do admin tạo';
     const currentMinutes = new Date().getHours() * 60 + new Date().getMinutes();
-    if (currentMinutes < 8 * 60 + 30) return 'Mở lúc 08:30';
-    if (currentMinutes > 9 * 60 + 30) return 'Đã quá giờ — Vắng';
-    return currentMinutes <= 9 * 60 ? 'Check-in đúng giờ' : 'Check-in đi muộn';
-  }, [selectedDate, today, todayItem]);
+    if (currentMinutes < todayWindow.startMinutes) {
+      const hours = String(Math.floor(todayWindow.startMinutes / 60)).padStart(2, '0');
+      const minutes = String(todayWindow.startMinutes % 60).padStart(2, '0');
+      return `Mở lúc ${hours}:${minutes}`;
+    }
+    if (currentMinutes > todayWindow.endMinutes) return 'Đã quá giờ — Vắng';
+    const onTimeEnd = todayWindow.startMinutes + 30;
+    return currentMinutes <= onTimeEnd ? 'Check-in đúng giờ' : 'Check-in đi muộn';
+  }, [selectedDate, today, todayItem, todayWindow]);
 
   const canCheckInNow = useMemo(() => {
     if (selectedDate !== today) return false;
     if (todayItem) return false;
+    const window = getEffectiveCheckInWindow(schedules, today);
+    if (!window) return false;
     const currentMinutes = new Date().getHours() * 60 + new Date().getMinutes();
-    return currentMinutes >= 8 * 60 + 30 && currentMinutes <= 9 * 60 + 30;
-  }, [selectedDate, today, todayItem]);
+    const canCheck = currentMinutes >= window.startMinutes && currentMinutes <= window.endMinutes;
+    console.log('[canCheckInNow]', {
+      schedules: schedules.length,
+      today,
+      selectedDate,
+      window,
+      currentMinutes,
+      canCheck
+    });
+    return canCheck;
+  }, [selectedDate, today, todayItem, schedules]);
+
+  const todayCheckoutWindow = useMemo(() => getEffectiveCheckOutWindow(schedules, today), [schedules, today]);
 
   const canCheckOutNow = useMemo(() => {
     if (selectedDate !== today || !todayItem || todayItem.checkOutTime) return false;
+    if (!todayCheckoutWindow) return false;
     const currentMinutes = new Date().getHours() * 60 + new Date().getMinutes();
-    return currentMinutes >= 16 * 60 + 30 && currentMinutes <= 17 * 60;
-  }, [selectedDate, today, todayItem]);
+    return currentMinutes >= todayCheckoutWindow.startMinutes && currentMinutes <= todayCheckoutWindow.endMinutes;
+  }, [selectedDate, today, todayItem, todayCheckoutWindow]);
 
   const checkInDisabledReason = useMemo(() => {
     if (selectedDate !== today) return 'Chỉ có thể check-in cho ngày hôm nay.';
     if (todayItem) return 'Bạn đã check-in hôm nay rồi.';
+    if (!todayWindow) return 'Chưa có lịch check-in do admin tạo cho hôm nay.';
     const currentMinutes = new Date().getHours() * 60 + new Date().getMinutes();
-    if (currentMinutes < 8 * 60 + 30) return 'Check-in chỉ mở từ 08:30.';
-    if (currentMinutes > 9 * 60 + 30) return 'Đã quá 09:30, hôm nay được tính vắng.';
+    if (currentMinutes < todayWindow.startMinutes) {
+      const hours = String(Math.floor(todayWindow.startMinutes / 60)).padStart(2, '0');
+      const minutes = String(todayWindow.startMinutes % 60).padStart(2, '0');
+      return `Check-in chỉ mở từ ${hours}:${minutes}.`;
+    }
+    if (currentMinutes > todayWindow.endMinutes) {
+      const hours = String(Math.floor(todayWindow.endMinutes / 60)).padStart(2, '0');
+      const mins = String(todayWindow.endMinutes % 60).padStart(2, '0');
+      return `Đã quá ${hours}:${mins}, hôm nay được tính vắng.`;
+    }
     return null;
-  }, [selectedDate, today, todayItem]);
+  }, [selectedDate, today, todayItem, todayWindow]);
 
   const getEventsForDate = (date) => {
     // Use centralized local date normalizer
@@ -464,7 +633,7 @@ function CheckInPage() {
           ? 'Đi muộn'
           : 'Vắng'
     : selectedDate === today
-      ? 'Chưa check-in'
+      ? (getEffectiveCheckInWindow(schedules, today) ? 'Chưa check-in' : 'Chưa có lịch')
       : 'Chưa có dữ liệu';
 
   const selectedStatusClass = selectedDayCheckIn
@@ -502,7 +671,7 @@ function CheckInPage() {
       const payload = {
         date: selectedDate,
         time: now.toTimeString().split(' ')[0],
-        status: getExpectedCheckInStatus(selectedDaySchedules, selectedDayMeetings, now),
+        status: getExpectedCheckInStatus(schedules, selectedDate, now),
         note: checkInNote || undefined,
       };
       const res = await submitCheckIn(payload);
@@ -537,18 +706,21 @@ function CheckInPage() {
       setStatusMessage('Bạn đã check-out cho ngày hôm nay rồi.');
       return;
     }
+    if (!todayCheckoutWindow) {
+      setStatusMessage('Chưa có lịch check-out hôm nay.');
+      return;
+    }
     if (!canCheckOutNow) {
-      setStatusMessage('Checkout chỉ mở từ 16:30 đến 17:00.');
+      const hours = String(Math.floor(todayCheckoutWindow.startMinutes / 60)).padStart(2, '0');
+      const mins = String(todayCheckoutWindow.startMinutes % 60).padStart(2, '0');
+      const endHours = String(Math.floor(todayCheckoutWindow.endMinutes / 60)).padStart(2, '0');
+      const endMins = String(todayCheckoutWindow.endMinutes % 60).padStart(2, '0');
+      setStatusMessage(`Checkout chỉ mở từ ${hours}:${mins} đến ${endHours}:${endMins}.`);
       return;
     }
 
     try {
-      const now = new Date();
-      const payload = {
-        date: selectedDate,
-        checkOutTime: now.toTimeString().split(' ')[0],
-      };
-      const res = await submitCheckOut(payload);
+      const res = await submitCheckOut({ date: selectedDate });
       if (res && res.success) {
         setStatusMessage('Đã check-out thành công!');
         loadCheckIns();
@@ -724,64 +896,68 @@ function CheckInPage() {
 
       {statusMessage && <div className="info-card"><p>{statusMessage}</p></div>}
 
-      {isStudent && <div className="checkin-summary-grid">
-        <div className="checkin-summary-card highlight">
-          <p className="subtle-text">Ngày được chọn</p>
-          <h2>{formatLongDate(selectedDate)}</h2>
-          <div className={`status-chip ${selectedStatusClass}`}>{selectedStatusLabel}</div>
-          <div className="checkin-summary-values">
-            <div>
-              <span>Check-in</span>
-              <strong>{selectedDayCheckIn?.time || '--:--'}</strong>
+      {isStudent && (
+        <div className="checkin-summary-grid">
+          <div className="checkin-summary-card highlight">
+            <p className="subtle-text">Ngày được chọn</p>
+            <h2>{formatLongDate(selectedDate)}</h2>
+            <div className={`status-chip ${selectedStatusClass}`}>{selectedStatusLabel}</div>
+            <div className="checkin-summary-values">
+              <div>
+                <span>Check-in</span>
+                <strong>{selectedDayCheckIn?.time || '--:--'}</strong>
+              </div>
+              <div>
+                <span>Check-out</span>
+                <strong>{selectedDayCheckIn?.checkOutTime || '--:--'}</strong>
+              </div>
             </div>
-            <div>
-              <span>Check-out</span>
-              <strong>{selectedDayCheckIn?.checkOutTime || '--:--'}</strong>
-            </div>
+            <p className="box-meta">
+              {selectedDate === today
+                ? todayWindow
+                  ? `Đúng giờ ${formatClock(formatMinutesToTimeString(todayWindow.startMinutes))}–${formatClock(formatMinutesToTimeString(todayWindow.startMinutes + 30))} · Đi muộn ${formatClock(formatMinutesToTimeString(todayWindow.startMinutes + 31))}–${formatClock(formatMinutesToTimeString(todayWindow.endMinutes))} · Checkout ${getCheckoutTimeRangeLabel(todayCheckoutWindow)}`
+                  : 'Chưa có lịch check-in hôm nay.'
+                : 'Chọn một ngày khác trên lịch để xem thông tin.'}
+            </p>
           </div>
-          <p className="box-meta">
-            {selectedDate === today
-              ? 'Đúng giờ 08:30–09:00 · Đi muộn 09:01–09:30 · Checkout 16:30–17:00.'
-              : 'Chọn một ngày khác trên lịch để xem thông tin.'}
-          </p>
-        </div>
 
-        <div className="checkin-summary-card stats-card">
-          <p className="subtle-text">Thống kê tháng</p>
-          <div className="stats-list">
-            <div className="stats-item green">
-              <span>Có mặt</span>
-              <strong>{monthlyStats.present}</strong>
-            </div>
-            <div className="stats-item yellow">
-              <span>Đi muộn</span>
-              <strong>{monthlyStats.late}</strong>
-            </div>
-            <div className="stats-item red">
-              <span>Vắng mặt</span>
-              <strong>{monthlyStats.absent}</strong>
-            </div>
-            <div className="stats-item gray">
-              <span>Tổng ngày công</span>
-              <strong>{monthlyStats.total}</strong>
+          <div className="checkin-summary-card stats-card">
+            <p className="subtle-text">Thống kê tháng</p>
+            <div className="stats-list">
+              <div className="stats-item green">
+                <span>Có mặt</span>
+                <strong>{monthlyStats.present}</strong>
+              </div>
+              <div className="stats-item yellow">
+                <span>Đi muộn</span>
+                <strong>{monthlyStats.late}</strong>
+              </div>
+              <div className="stats-item red">
+                <span>Vắng mặt</span>
+                <strong>{monthlyStats.absent}</strong>
+              </div>
+              <div className="stats-item gray">
+                <span>Tổng ngày công</span>
+                <strong>{monthlyStats.total}</strong>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className="checkin-summary-card quick-card">
-          <p className="subtle-text">Check-in tuần</p>
-          <h2>{weeklySummary.total} lần</h2>
-          <div className="mini-stats-row">
-            <span>Có mặt {weeklySummary.present}</span>
-            <span>Muộn {weeklySummary.late}</span>
+          <div className="checkin-summary-card quick-card">
+            <p className="subtle-text">Check-in tuần</p>
+            <h2>{weeklySummary.total} lần</h2>
+            <div className="mini-stats-row">
+              <span>Có mặt {weeklySummary.present}</span>
+              <span>Muộn {weeklySummary.late}</span>
+            </div>
+            <div className="mini-stats-row">
+              <span>Vắng {weeklySummary.absent}</span>
+              <span>Hôm nay: {todayItem ? 'Đã xong' : 'Chưa check-in'}</span>
+            </div>
+            <div className="box-meta">{dayStatusHeadline}</div>
           </div>
-          <div className="mini-stats-row">
-            <span>Vắng {weeklySummary.absent}</span>
-            <span>Hôm nay: {todayItem ? 'Đã xong' : 'Chưa check-in'}</span>
-          </div>
-          <div className="box-meta">{dayStatusHeadline}</div>
         </div>
-      </div>}
+      )}
 
       <div className="checkin-main-grid">
         <section className="card calendar-card">
@@ -947,7 +1123,7 @@ function CheckInPage() {
                 >
                   {selectedDayCheckInLabel}
                 </button>
-                <button type="button" className="btn" onClick={handleCheckOut} disabled={!isStudent || !canCheckOutNow} title="Checkout mở từ 16:30 đến 17:00">
+                <button type="button" className="btn" onClick={handleCheckOut} disabled={!isStudent || !canCheckOutNow} title={getCheckoutTooltip(todayCheckoutWindow)}>
                   {todayItem?.checkOutTime ? 'Complete' : 'Check-out hôm nay'}
                 </button>
               </>
@@ -1008,7 +1184,7 @@ function CheckInPage() {
                     <button type="button" className="btn" onClick={handleCheckIn} disabled={!isStudent || selectedDate !== today || Boolean(todayItem) || !canCheckInNow} title={checkInDisabledReason || ''}>
                       {selectedDayCheckInLabel}
                     </button>
-                    <button type="button" className="btn outline" onClick={handleCheckOut} disabled={!isStudent || !canCheckOutNow} title="Checkout mở từ 16:30 đến 17:00">
+                    <button type="button" className="btn outline" onClick={handleCheckOut} disabled={!isStudent || !canCheckOutNow} title={getCheckoutTooltip(todayCheckoutWindow)}>
                       {todayItem?.checkOutTime ? 'Complete' : 'Check-out'}
                     </button>
                   </>
@@ -1151,6 +1327,8 @@ function CheckInPage() {
               <select value={adminForm.type} onChange={(e) => setAdminForm({ ...adminForm, type: e.target.value })}>
                 <option value="WORK">Công việc</option>
                 <option value="MEETING">Họp</option>
+                <option value="CHECKIN">Check-in</option>
+                <option value="CHECKOUT">Check-out</option>
                 <option value="DEADLINE">Deadline</option>
                 <option value="OTHER">Khác</option>
               </select>

@@ -3,14 +3,166 @@ const Internship = require('../models/internship');
 const Student = require('../models/student');
 const Position = require('../models/position');
 const Mentor = require('../models/mentor');
+const Schedule = require('../models/schedule');
 const { Op } = require('sequelize');
 
 const TIME_ZONE = 'Asia/Ho_Chi_Minh';
-const CHECK_IN_START = 8 * 60 + 30;
-const ON_TIME_END = 9 * 60;
-const CHECK_IN_END = 9 * 60 + 30;
-const CHECK_OUT_START = 16 * 60 + 30;
-const CHECK_OUT_END = 17 * 60;
+
+const parseTimeToMinutes = (value) => {
+    if (!value) return null;
+    const [hours, minutes] = String(value).split(':').map(Number);
+    if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+    return hours * 60 + minutes;
+};
+
+const formatMinutesToTime = (minutes) => {
+    if (minutes == null || Number.isNaN(minutes)) return '00:00:00';
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:00`;
+};
+
+const getEffectiveCheckInWindow = async ({ student, currentDate = null, currentMinutes = null } = {}) => {
+    const now = getVietnamNow();
+    const date = currentDate || now.date;
+    const minutes = currentMinutes ?? now.minutes;
+
+    const scheduledItems = await Schedule.findAll({
+        where: {
+            startDate: { [Op.lte]: date },
+            endDate: { [Op.gte]: date }
+        },
+        order: [['startTime', 'ASC']]
+    });
+
+    const todaySchedules = (scheduledItems || []).filter((item) => item && item.type !== 'CHECKOUT');
+
+    console.log('[getEffectiveCheckInWindow] Searching for schedules:', {
+        date,
+        minutes,
+        studentPeriodId: student?.periodId,
+        foundSchedules: todaySchedules.map(s => ({
+            id: s.id,
+            title: s.title,
+            startDate: s.startDate,
+            endDate: s.endDate,
+            startTime: s.startTime,
+            endTime: s.endTime,
+            type: s.type,
+            audience: s.audience,
+            periodId: s.periodId
+        }))
+    });
+
+    // Find schedule that matches student's period (if applicable)
+    // First, try to find current/matching schedule where current time falls within it
+    const matchingSchedule = todaySchedules.find((item) => {
+        if (item.audience === 'SPECIFIC_PERIOD' && student?.periodId && item.periodId && Number(item.periodId) !== Number(student.periodId)) {
+            return false;
+        }
+        if (item.audience === 'SPECIFIC_PERIOD' && student?.periodId && (!item.periodId || Number(item.periodId) !== Number(student.periodId))) {
+            return false;
+        }
+        const startMinutes = parseTimeToMinutes(item.startTime);
+        const endMinutes = parseTimeToMinutes(item.endTime);
+        console.log('[matchingSchedule check]', {
+            title: item.title,
+            startTime: item.startTime,
+            endTime: item.endTime,
+            startMinutes,
+            endMinutes,
+            currentMinutes: minutes,
+            matches: startMinutes != null && endMinutes != null && minutes >= startMinutes && minutes <= endMinutes
+        });
+        return startMinutes != null && endMinutes != null && minutes >= startMinutes && minutes <= endMinutes;
+    });
+
+    if (matchingSchedule) {
+        const result = {
+            startMinutes: parseTimeToMinutes(matchingSchedule.startTime),
+            endMinutes: parseTimeToMinutes(matchingSchedule.endTime),
+            source: 'schedule'
+        };
+        console.log('[getEffectiveCheckInWindow] Using current matching schedule:', result);
+        return result;
+    }
+
+    // If no schedule found where current time falls within, find the first applicable schedule
+    const firstApplicableSchedule = todaySchedules.find((item) => {
+        if (item.audience === 'SPECIFIC_PERIOD' && student?.periodId && item.periodId && Number(item.periodId) !== Number(student.periodId)) {
+            return false;
+        }
+        if (item.audience === 'SPECIFIC_PERIOD' && student?.periodId && (!item.periodId || Number(item.periodId) !== Number(student.periodId))) {
+            return false;
+        }
+        const startMinutes = parseTimeToMinutes(item.startTime);
+        const endMinutes = parseTimeToMinutes(item.endTime);
+        return startMinutes != null && endMinutes != null;
+    });
+
+    if (firstApplicableSchedule) {
+        const result = {
+            startMinutes: parseTimeToMinutes(firstApplicableSchedule.startTime),
+            endMinutes: parseTimeToMinutes(firstApplicableSchedule.endTime),
+            source: 'schedule'
+        };
+        console.log('[getEffectiveCheckInWindow] Using first applicable schedule:', result);
+        return result;
+    }
+
+    console.log('[getEffectiveCheckInWindow] No schedule found for today');
+    return null;
+};
+
+const getEffectiveCheckOutWindow = async ({ student, currentDate = null, currentMinutes = null } = {}) => {
+    const now = getVietnamNow();
+    const date = currentDate || now.date;
+    const minutes = currentMinutes ?? now.minutes;
+
+    const todaySchedules = await Schedule.findAll({
+        where: {
+            startDate: { [Op.lte]: date },
+            endDate: { [Op.gte]: date },
+            type: 'CHECKOUT'
+        },
+        order: [['startTime', 'ASC']]
+    });
+
+    const applicableSchedules = todaySchedules.filter((item) => {
+        if (item.audience === 'SPECIFIC_PERIOD' && student?.periodId && item.periodId && Number(item.periodId) !== Number(student.periodId)) {
+            return false;
+        }
+        if (item.audience === 'SPECIFIC_PERIOD' && student?.periodId && (!item.periodId || Number(item.periodId) !== Number(student.periodId))) {
+            return false;
+        }
+        return true;
+    });
+
+    const matchingSchedule = applicableSchedules.find((item) => {
+        const startMinutes = parseTimeToMinutes(item.startTime);
+        const endMinutes = parseTimeToMinutes(item.endTime);
+        return startMinutes != null && endMinutes != null && minutes >= startMinutes && minutes <= endMinutes;
+    });
+
+    if (matchingSchedule) {
+        return {
+            startMinutes: parseTimeToMinutes(matchingSchedule.startTime),
+            endMinutes: parseTimeToMinutes(matchingSchedule.endTime),
+            source: 'schedule'
+        };
+    }
+
+    const firstApplicableSchedule = applicableSchedules[0];
+    if (firstApplicableSchedule) {
+        return {
+            startMinutes: parseTimeToMinutes(firstApplicableSchedule.startTime),
+            endMinutes: parseTimeToMinutes(firstApplicableSchedule.endTime),
+            source: 'schedule'
+        };
+    }
+
+    return null;
+};
 
 const getVietnamNow = () => {
     const parts = Object.fromEntries(
@@ -98,11 +250,26 @@ const resolveInternship = async (userId, internshipId = null) => {
 
 const createCheckIn = async ({ userId, internshipId, note }) => {
     const now = getVietnamNow();
-    if (now.minutes < CHECK_IN_START) {
-        throw new Error('Check-in chỉ mở từ 08:30.');
+    const student = await Student.findOne({ where: { userId } });
+    const window = await getEffectiveCheckInWindow({ student, currentDate: now.date, currentMinutes: now.minutes });
+
+    console.log('[CHECK-IN]', {
+        userId,
+        date: now.date,
+        time: now.time,
+        minutes: now.minutes,
+        window,
+        studentPeriodId: student?.periodId
+    });
+
+    if (!window) {
+        throw new Error('Chưa có lịch check-in do admin tạo cho hôm nay.');
     }
-    if (now.minutes > CHECK_IN_END) {
-        throw new Error('Đã quá 09:30. Hôm nay bạn được ghi nhận vắng mặt.');
+    if (now.minutes < window.startMinutes) {
+        throw new Error(`Check-in chỉ mở từ ${String(Math.floor(window.startMinutes / 60)).padStart(2, '0')}:${String(window.startMinutes % 60).padStart(2, '0')}.`);
+    }
+    if (now.minutes > window.endMinutes) {
+        throw new Error(`Đã quá ${String(Math.floor(window.endMinutes / 60)).padStart(2, '0')}:${String(window.endMinutes % 60).padStart(2, '0')}. Hôm nay bạn được ghi nhận vắng mặt.`);
     }
 
     const internship = await resolveInternship(userId, internshipId);
@@ -110,10 +277,11 @@ const createCheckIn = async ({ userId, internshipId, note }) => {
     if (existing) {
         throw new Error('Bạn đã check-in cho ngày hôm nay rồi');
     }
+    const onTimeEnd = window.startMinutes + 30; // on-time is 30 mins after window start
     return CheckIn.create({
         date: now.date,
         time: now.time,
-        status: now.minutes <= ON_TIME_END ? 'PRESENT' : 'LATE',
+        status: now.minutes <= onTimeEnd ? 'PRESENT' : 'LATE',
         internshipId: internship.id,
         note
     });
@@ -121,6 +289,7 @@ const createCheckIn = async ({ userId, internshipId, note }) => {
 
 const recordCheckOut = async ({ userId, internshipId }) => {
     const now = getVietnamNow();
+    const student = await Student.findOne({ where: { userId } });
     const internship = await resolveInternship(userId, internshipId);
     const checkIn = await CheckIn.findOne({
         where: { internshipId: internship.id, date: now.date }
@@ -131,13 +300,15 @@ const recordCheckOut = async ({ userId, internshipId }) => {
     if (checkIn.checkOutTime) {
         throw new Error('Bạn đã check-out hôm nay.');
     }
-    if (now.minutes < CHECK_OUT_START) {
-        throw new Error('Checkout chỉ mở từ 16:30.');
+    const checkoutWindow = await getEffectiveCheckOutWindow({ student, currentDate: now.date, currentMinutes: now.minutes });
+    if (!checkoutWindow) {
+        throw new Error('Chưa có lịch checkout hôm nay.');
     }
-    if (now.minutes > CHECK_OUT_END) {
-        checkIn.status = 'ABSENT';
-        await checkIn.save();
-        throw new Error('Đã quá 17:00. Hôm nay bạn được ghi nhận vắng mặt.');
+    if (now.minutes < checkoutWindow.startMinutes) {
+        throw new Error(`Checkout chỉ mở từ ${String(Math.floor(checkoutWindow.startMinutes / 60)).padStart(2, '0')}:${String(checkoutWindow.startMinutes % 60).padStart(2, '0')}.`);
+    }
+    if (now.minutes > checkoutWindow.endMinutes) {
+        throw new Error(`Đã quá ${String(Math.floor(checkoutWindow.endMinutes / 60)).padStart(2, '0')}:${String(checkoutWindow.endMinutes % 60).padStart(2, '0')}.`);
     }
     checkIn.checkOutTime = now.time;
     return await checkIn.save();
@@ -167,26 +338,6 @@ const getCheckInsByUser = async (userId) => {
     const todayRecord = await CheckIn.findOne({
         where: { internshipId: { [Op.in]: internshipIds }, date: now.date }
     });
-    const isWeekday = !['Sat', 'Sun'].includes(now.weekday);
-    if (!todayRecord && isWeekday && now.minutes > CHECK_IN_END) {
-        await CheckIn.create({
-            internshipId: currentInternship?.id || internshipIds[0],
-            date: now.date,
-            time: '09:30:00',
-            status: 'ABSENT',
-            note: 'Không check-in trong khung giờ quy định'
-        });
-    } else if (
-        todayRecord
-        && !todayRecord.checkOutTime
-        && now.minutes > CHECK_OUT_END
-        && todayRecord.status !== 'ABSENT'
-    ) {
-        await todayRecord.update({
-            status: 'ABSENT',
-            note: 'Không checkout trong khung giờ quy định'
-        });
-    }
 
     return CheckIn.findAll({
         where: { internshipId: internshipIds },
@@ -255,5 +406,6 @@ module.exports = {
     recordCheckOut,
     getCheckInsByUser,
     getAdminSummary,
-    getAdminDetail
+    getAdminDetail,
+    getEffectiveCheckInWindow
 };

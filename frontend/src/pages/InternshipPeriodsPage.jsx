@@ -130,8 +130,35 @@ function InternshipPeriodsPage() {
   const handleSubmit = async (event) => {
     event.preventDefault();
     setMessage('');
+    
+    // Client-side validation
+    if (!form.name || !form.name.trim()) {
+      setMessage('Vui lòng nhập tên kỳ');
+      return;
+    }
+    if (!form.startDate) {
+      setMessage('Vui lòng chọn ngày bắt đầu');
+      return;
+    }
+    if (!form.endDate) {
+      setMessage('Vui lòng chọn ngày kết thúc');
+      return;
+    }
+    
+    const start = new Date(form.startDate);
+    const end = new Date(form.endDate);
+    if (end <= start) {
+      setMessage('Ngày kết thúc phải sau ngày bắt đầu');
+      return;
+    }
+    
     try {
-      const payload = { ...form };
+      // Auto-generate academicYear from startDate if empty
+      const payload = { 
+        ...form,
+        academicYear: form.academicYear || `${start.getFullYear()}-${end.getFullYear()}`
+      };
+      
       const res = editingPeriod
         ? await updatePeriod(editingPeriod.id, payload)
         : await createPeriod(payload);
@@ -140,9 +167,11 @@ function InternshipPeriodsPage() {
         setMessage(editingPeriod ? 'Đã cập nhật kỳ thực tập.' : 'Đã tạo kỳ thực tập mới.');
         closeForm();
         setQuery((current) => ({ ...current }));
+      } else {
+        setMessage(res?.message || 'Không thể lưu kỳ thực tập.');
       }
     } catch (error) {
-      setMessage(error.response?.data?.message || 'Không thể lưu kỳ thực tập.');
+      setMessage(error.response?.data?.message || error.message || 'Không thể lưu kỳ thực tập.');
     }
   };
 
@@ -257,7 +286,7 @@ function InternshipPeriodsPage() {
                     <td>
                       <div className="button-row period-actions">
                         <button className="btn" type="button" onClick={() => navigate(`/periods/${period.id}`)}>Chi tiết</button>
-                        {isAdmin && <button className="btn outline" type="button" onClick={() => openEdit(period)} disabled={period.computedStatus === 'COMPLETED' && process.env.ALLOW_EDIT_ENDED_PERIODS !== 'true'}>Sửa</button>}
+                        {isAdmin && <button className="btn outline" type="button" onClick={() => openEdit(period)} disabled={period.computedStatus === 'COMPLETED'}>Sửa</button>}
                         {isAdmin && <button className="btn outline danger" type="button" onClick={() => handleDelete(period)}>Xóa</button>}
                       </div>
                     </td>
@@ -285,7 +314,7 @@ function InternshipPeriodsPage() {
 
             <form className="form-stack" onSubmit={handleSubmit}>
               <input name="name" value={form.name} onChange={handleChange} placeholder="Tên kỳ" required />
-              <input name="academicYear" value={form.academicYear} onChange={handleChange} placeholder="Năm học" required />
+              <input name="academicYear" value={form.academicYear} onChange={handleChange} placeholder="Năm học (tự động nếu trống)" />
               <input type="date" name="startDate" value={form.startDate} onChange={handleChange} required />
               <input type="date" name="endDate" value={form.endDate} onChange={handleChange} required />
               <textarea name="description" value={form.description} onChange={handleChange} placeholder="Mô tả kỳ thực tập" rows="4" />

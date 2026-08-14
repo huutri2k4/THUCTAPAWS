@@ -304,7 +304,7 @@
 .big-progress{font-size:40px;font-weight:800;text-align:center;padding:40px}
 
 .app-shell{display:flex}
-.main-area{flex:1}
+.main-area{flex:1;margin-left:64px}
 .content-area{padding:20px 0}
 
 .auth-page {

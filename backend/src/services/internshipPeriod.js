@@ -203,17 +203,29 @@ const buildNotifications = (period, stats, weeklyReports) => {
 const createPeriod = async (data) => {
     const startDate = data.startDate;
     const endDate = data.endDate;
-    if (!data.name) throw new Error('Tên kỳ là bắt buộc');
+    
+    // Validation
+    if (!data.name || !data.name.trim()) throw new Error('Tên kỳ là bắt buộc');
     if (!startDate) throw new Error('Ngày bắt đầu là bắt buộc');
     if (!endDate) throw new Error('Ngày kết thúc là bắt buộc');
-    if (new Date(endDate) < new Date(startDate)) throw new Error('Ngày kết thúc phải sau ngày bắt đầu');
+    
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    if (isNaN(start.getTime())) throw new Error('Ngày bắt đầu không hợp lệ');
+    if (isNaN(end.getTime())) throw new Error('Ngày kết thúc không hợp lệ');
+    if (end <= start) throw new Error('Ngày kết thúc phải sau ngày bắt đầu');
+
+    // Auto-generate academicYear if not provided
+    const academicYear = data.academicYear && data.academicYear.trim() 
+        ? data.academicYear.trim() 
+        : formatAcademicYear(startDate, endDate);
 
     return await InternshipPeriod.create({
-        name: data.name,
-        academicYear: data.academicYear || formatAcademicYear(startDate, endDate),
+        name: data.name.trim(),
+        academicYear: academicYear,
         startDate,
         endDate,
-        description: data.description || ''
+        description: (data.description || '').trim()
     });
 };
 
